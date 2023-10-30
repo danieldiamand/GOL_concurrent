@@ -35,16 +35,15 @@ func distributor(p Params, c distributorChannels) {
 
 	// Execute all turns of the Game of Life.
 
-	//Divide the board up into sections
-	out := make(chan [][]byte)
 	turn := 0
 	for ; turn < p.Turns; turn++ {
-		go golWorker(p.ImageWidth, 0, p.ImageHeight, immutableWorld, out)
-		immutableWorld = makeImmutableMatrix(p, <-out)
+		world := calculateNextState(p.ImageWidth, 0, p.ImageHeight, immutableWorld)
+		//util.VisualiseMatrix(world, p.ImageWidth, p.ImageHeight)
+		immutableWorld = makeImmutableMatrix(p, world)
 	}
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
-	c.events <- FinalTurnComplete{turn, calculateAliveCells(p, world)}
+	c.events <- FinalTurnComplete{turn, calculateAliveCells(p, immutableWorld)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
@@ -125,11 +124,11 @@ func liveNeighbourCount(y, x, width int, board func(y, x int) uint8) int8 {
 	return count
 }
 
-func calculateAliveCells(p Params, world [][]byte) []util.Cell {
+func calculateAliveCells(p Params, board func(y, x int) uint8) []util.Cell {
 	cells := make([]util.Cell, 0)
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
-			if world[y][x] == 255 {
+			if board(y, x) == 255 {
 				cells = append(cells, util.Cell{x, y})
 			}
 		}
