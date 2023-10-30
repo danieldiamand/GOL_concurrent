@@ -34,12 +34,25 @@ func distributor(p Params, c distributorChannels) {
 	immutableWorld := makeImmutableMatrix(p, world)
 
 	// Execute all turns of the Game of Life.
+	channels := make([]chan [][]byte, p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		channels[i] = make(chan [][]byte)
+	}
 
-	out := make(chan [][]byte)
 	turn := 0
+	subHeight := p.ImageHeight / p.Threads
 	for ; turn < p.Turns; turn++ {
-		go golWorker(p.ImageWidth, 0, p.ImageHeight, immutableWorld, out)
-		world := <-out
+		var world [][]byte
+		for i := 0; i < p.Threads-1; i++ {
+			startY := subHeight * i
+			endY := subHeight * (i + 1)
+			go golWorker(p.ImageWidth, startY, endY, immutableWorld, channels[i])
+		}
+		go golWorker(p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight, immutableWorld, channels[p.Threads-1])
+
+		for i := 0; i < p.Threads; i++ {
+			world = append(world, <-channels[i]...)
+		}
 		immutableWorld = makeImmutableMatrix(p, world)
 	}
 
