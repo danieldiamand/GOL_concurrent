@@ -35,10 +35,11 @@ func distributor(p Params, c distributorChannels) {
 
 	// Execute all turns of the Game of Life.
 
+	out := make(chan [][]byte)
 	turn := 0
 	for ; turn < p.Turns; turn++ {
-		world := calculateNextState(p.ImageWidth, 0, p.ImageHeight, immutableWorld)
-		//util.VisualiseMatrix(world, p.ImageWidth, p.ImageHeight)
+		go golWorker(p.ImageWidth, 0, p.ImageHeight, immutableWorld, out)
+		world := <-out
 		immutableWorld = makeImmutableMatrix(p, world)
 	}
 
