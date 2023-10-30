@@ -19,14 +19,14 @@ func distributor(p Params, c distributorChannels) {
 
 	// Send things down channels to start
 	c.ioCommand <- ioInput
-	c.ioFilename <- fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
+	c.ioFilename <- fmt.Sprintf("%dx%d", p.ImageHeight, p.ImageWidth)
 
-	// TODO: Create a 2D slice to store the world.
+	// Create a 2D slice to store the world.
 
 	world := make([][]byte, p.ImageHeight)
 	for y := 0; y < p.ImageHeight; y++ {
-		world[y] = make([]byte, p.ImageHeight)
-		for x := 0; x < p.ImageHeight; x++ {
+		world[y] = make([]byte, p.ImageWidth)
+		for x := 0; x < p.ImageWidth; x++ {
 			world[y][x] = <-c.ioInput
 		}
 	}
@@ -34,7 +34,7 @@ func distributor(p Params, c distributorChannels) {
 	// TODO: Execute all turns of the Game of Life.
 	turn := 0
 	for ; turn < p.Turns; turn++ {
-		world = calculateNextState(p, world)
+		world = calculateNextState(world, p.ImageHeight, p.ImageWidth)
 	}
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
@@ -50,42 +50,17 @@ func distributor(p Params, c distributorChannels) {
 	close(c.events)
 }
 
-func liveNeighbourCount(y, x int, p Params, world [][]byte) int8 {
-	var count int8 = 0
-	if world[(y+1+p.ImageHeight)%p.ImageHeight][(x+1+p.ImageHeight)%p.ImageHeight] == 255 {
-		count++
-	}
-	if world[(y+1+p.ImageHeight)%p.ImageHeight][x] == 255 {
-		count++
-	}
-	if world[(y+1+p.ImageHeight)%p.ImageHeight][(x-1+p.ImageHeight)%p.ImageHeight] == 255 {
-		count++
-	}
-	if world[y][(x+1+p.ImageHeight)%p.ImageHeight] == 255 {
-		count++
-	}
-	if world[y][(x-1+p.ImageHeight)%p.ImageHeight] == 255 {
-		count++
-	}
-	if world[(y-1+p.ImageHeight)%p.ImageHeight][(x+1+p.ImageHeight)%p.ImageHeight] == 255 {
-		count++
-	}
-	if world[(y-1+p.ImageHeight)%p.ImageHeight][x] == 255 {
-		count++
-	}
-	if world[(y-1+p.ImageHeight)%p.ImageHeight][(x-1+p.ImageHeight)%p.ImageHeight] == 255 {
-		count++
-	}
-	return count
+func golWorker(board chan [][]uint8, w, h int) {
+
 }
 
 //using indexing x,y where 0,0 is top left of board
-func calculateNextState(p Params, world [][]byte) [][]byte {
-	newWorld := make([][]byte, p.ImageHeight)
-	for y := 0; y < p.ImageHeight; y++ {
-		newWorld[y] = make([]byte, p.ImageHeight)
-		for x := 0; x < p.ImageHeight; x++ {
-			count := liveNeighbourCount(y, x, p, world)
+func calculateNextState(world [][]byte, w, h int) [][]byte {
+	newWorld := make([][]byte, h)
+	for y := 0; y < h; y++ {
+		newWorld[y] = make([]byte, h)
+		for x := 0; x < h; x++ {
+			count := liveNeighbourCount(y, x, w, h, world)
 			if world[y][x] == 255 { //if cells alive:
 				if count == 2 || count == 3 { //any live cell with two or three live neighbours is unaffected
 					newWorld[y][x] = 255
@@ -102,10 +77,39 @@ func calculateNextState(p Params, world [][]byte) [][]byte {
 	return newWorld
 }
 
+func liveNeighbourCount(y, x, w, h int, world [][]byte) int8 {
+	var count int8 = 0
+	if world[(y+1+h)%h][(x+1+w)%w] == 255 {
+		count++
+	}
+	if world[(y+1+h)%h][x] == 255 {
+		count++
+	}
+	if world[(y+1+h)%h][(x-1+h)%h] == 255 {
+		count++
+	}
+	if world[y][(x+1+h)%h] == 255 {
+		count++
+	}
+	if world[y][(x-1+h)%h] == 255 {
+		count++
+	}
+	if world[(y-1+h)%h][(x+1+h)%h] == 255 {
+		count++
+	}
+	if world[(y-1+h)%h][x] == 255 {
+		count++
+	}
+	if world[(y-1+h)%h][(x-1+h)%h] == 255 {
+		count++
+	}
+	return count
+}
+
 func calculateAliveCells(p Params, world [][]byte) []util.Cell {
 	cells := make([]util.Cell, 0)
 	for y := 0; y < p.ImageHeight; y++ {
-		for x := 0; x < p.ImageHeight; x++ {
+		for x := 0; x < p.ImageWidth; x++ {
 			if world[y][x] == 255 {
 				cells = append(cells, util.Cell{x, y})
 			}
