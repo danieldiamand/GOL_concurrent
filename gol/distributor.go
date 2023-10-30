@@ -31,10 +31,16 @@ func distributor(p Params, c distributorChannels) {
 		}
 	}
 
-	// TODO: Execute all turns of the Game of Life.
+	immutableWorld := makeImmutableMatrix(p, world)
+
+	// Execute all turns of the Game of Life.
+
+	//Divide the board up into sections
+	out := make(chan [][]byte)
 	turn := 0
 	for ; turn < p.Turns; turn++ {
-		world = calculateNextState(world, p.ImageHeight, p.ImageWidth)
+		go golWorker(p.ImageWidth, 0, p.ImageHeight, immutableWorld, out)
+		immutableWorld = makeImmutableMatrix(p, <-out)
 	}
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
@@ -50,26 +56,38 @@ func distributor(p Params, c distributorChannels) {
 	close(c.events)
 }
 
-func golWorker(board chan [][]uint8, w, h int) {
+// makeImmutableMatrix takes an existing 2D matrix and wraps it in a getter closure.
+func makeImmutableMatrix(p Params, matrix [][]uint8) func(y, x int) uint8 {
+	return func(y, x int) uint8 {
+		return matrix[(y+p.ImageHeight)%p.ImageHeight][(x+p.ImageWidth)%p.ImageWidth]
+	}
+}
 
+func golWorker(width, startY, endY int, oldBoard func(y, x int) uint8, out chan<- [][]byte) {
+	out <- calculateNextState(width, startY, endY, oldBoard)
 }
 
 //using indexing x,y where 0,0 is top left of board
-func calculateNextState(world [][]byte, w, h int) [][]byte {
-	newWorld := make([][]byte, h)
-	for y := 0; y < h; y++ {
-		newWorld[y] = make([]byte, h)
-		for x := 0; x < h; x++ {
-			count := liveNeighbourCount(y, x, w, h, world)
-			if world[y][x] == 255 { //if cells alive:
+func calculateNextState(width, startY, endY int, oldBoard func(y, x int) uint8) [][]byte {
+	//make new world
+	newWorld := make([][]byte, endY-startY)
+	for y := 0; y < endY-startY; y++ {
+		newWorld[y] = make([]byte, width)
+	}
+
+	//update new world
+	for y := startY; y < endY; y++ {
+		for x := 0; x < width; x++ {
+			count := liveNeighbourCount(y, x, width, oldBoard)
+			if oldBoard(y, x) == 255 { //if cells alive:
 				if count == 2 || count == 3 { //any live cell with two or three live neighbours is unaffected
-					newWorld[y][x] = 255
+					newWorld[y-startY][x] = 255
 				}
 				//any live cell with fewer than two or more than three live neighbours dies
 				//in go slices are initialized to zero, so we don't need to do anything
 			} else { //cells dead
 				if count == 3 { //any dead cell with exactly three live neighbours becomes alive
-					newWorld[y][x] = 255
+					newWorld[y-startY][x] = 255
 				}
 			}
 		}
@@ -77,32 +95,33 @@ func calculateNextState(world [][]byte, w, h int) [][]byte {
 	return newWorld
 }
 
-func liveNeighbourCount(y, x, w, h int, world [][]byte) int8 {
+func liveNeighbourCount(y, x, width int, board func(y, x int) uint8) int8 {
 	var count int8 = 0
-	if world[(y+1+h)%h][(x+1+w)%w] == 255 {
+	if board(y+1, x+1) == 255 {
 		count++
 	}
-	if world[(y+1+h)%h][x] == 255 {
+	if board(y+1, x) == 255 {
 		count++
 	}
-	if world[(y+1+h)%h][(x-1+h)%h] == 255 {
+	if board(y+1, x-1) == 255 {
 		count++
 	}
-	if world[y][(x+1+h)%h] == 255 {
+	if board(y, x+1) == 255 {
 		count++
 	}
-	if world[y][(x-1+h)%h] == 255 {
+	if board(y, x-1) == 255 {
 		count++
 	}
-	if world[(y-1+h)%h][(x+1+h)%h] == 255 {
+	if board(y-1, x+1) == 255 {
 		count++
 	}
-	if world[(y-1+h)%h][x] == 255 {
+	if board(y-1, x) == 255 {
 		count++
 	}
-	if world[(y-1+h)%h][(x-1+h)%h] == 255 {
+	if board(y-1, x-1) == 255 {
 		count++
 	}
+
 	return count
 }
 
