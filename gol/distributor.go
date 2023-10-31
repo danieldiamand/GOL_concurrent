@@ -22,12 +22,16 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	c.ioCommand <- ioInput
 	c.ioFilename <- fmt.Sprintf("%dx%d", p.ImageHeight, p.ImageWidth)
 
-	//Create 2D slice and store received world in it:
+	//Create 2D slice and store received world in it, also send live cells down cell flipped
 	startWorld := make([][]byte, p.ImageHeight)
 	for y := 0; y < p.ImageHeight; y++ {
 		startWorld[y] = make([]byte, p.ImageWidth)
 		for x := 0; x < p.ImageWidth; x++ {
-			startWorld[y][x] = <-c.ioInput
+			cell := <-c.ioInput
+			if cell == 255 {
+				c.events <- CellFlipped{0, util.Cell{x, y}}
+			}
+			startWorld[y][x] = cell
 		}
 	}
 
@@ -128,7 +132,7 @@ func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitG
 	wg.Done()
 }
 
-// Progresses section of world and sends results down out
+// Progresses section of world and sends results down out, sends updated cells down c.events
 func progressWorld(oldWorld func(y, x int) byte, out chan<- [][]byte, width, startY, endY int, c distributorChannels, turn int) {
 	//Make newWorld
 	newWorld := make([][]byte, endY-startY)
