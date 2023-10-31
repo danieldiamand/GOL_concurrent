@@ -2,6 +2,7 @@ package gol
 
 import (
 	"fmt"
+	"sync"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -32,32 +33,21 @@ func distributor(p Params, c distributorChannels) {
 	}
 
 	immutableWorld := makeImmutableMatrix(p, world)
-
-	// Execute all turns of the Game of Life.
-	channels := make([]chan [][]byte, p.Threads)
-	for i := 0; i < p.Threads; i++ {
-		channels[i] = make(chan [][]byte)
-	}
+	immutableWorldChannel := make(chan func(y, x int) byte, 1)
+	immutableWorldChannel <- immutableWorld
 
 	turn := 0
-	subHeight := p.ImageHeight / p.Threads
-	for ; turn < p.Turns; turn++ {
-		var world [][]byte
-		for i := 0; i < p.Threads-1; i++ {
-			startY := subHeight * i
-			endY := subHeight * (i + 1)
-			go golWorker(p.ImageWidth, startY, endY, immutableWorld, channels[i])
-		}
-		go golWorker(p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight, immutableWorld, channels[p.Threads-1])
 
-		for i := 0; i < p.Threads; i++ {
-			world = append(world, <-channels[i]...)
-		}
-		immutableWorld = makeImmutableMatrix(p, world)
+	var wg sync.WaitGroup
+
+	for ; turn < p.Turns; turn++ {
+		wg.Add(1)
+		go distributeTurn(immutableWorldChannel, p, &wg)
+		wg.Wait()
 	}
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
-	c.events <- FinalTurnComplete{turn, calculateAliveCells(p, immutableWorld)}
+	c.events <- FinalTurnComplete{turn, calculateAliveCells(p, <-immutableWorldChannel)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
@@ -67,6 +57,30 @@ func distributor(p Params, c distributorChannels) {
 
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
+}
+
+func distributeTurn(immutableBoardChannel chan func(y, x int) uint8, p Params, wg *sync.WaitGroup) {
+	// Execute all turns of the Game of Life.
+	channels := make([]chan [][]byte, p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		channels[i] = make(chan [][]byte)
+	}
+
+	subHeight := p.ImageHeight / p.Threads
+	immutableWorld := <-immutableBoardChannel
+	var world [][]byte
+	for i := 0; i < p.Threads-1; i++ {
+		startY := subHeight * i
+		endY := subHeight * (i + 1)
+		go golWorker(p.ImageWidth, startY, endY, immutableWorld, channels[i])
+	}
+	go golWorker(p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight, immutableWorld, channels[p.Threads-1])
+
+	for i := 0; i < p.Threads; i++ {
+		world = append(world, <-channels[i]...)
+	}
+	wg.Done()
+	immutableBoardChannel <- makeImmutableMatrix(p, world)
 }
 
 // makeImmutableMatrix takes an existing 2D matrix and wraps it in a getter closure.
