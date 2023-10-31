@@ -42,12 +42,12 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	for turn < p.Turns {
 		select {
 		case safeWorld = <-worldChan:
-			turn++
 			c.events <- TurnComplete{turn}
 			worldChan <- safeWorld
 			wg.Add(1)
-			go distributeTurn(worldChan, p, &wg)
+			go distributeTurn(worldChan, p, &wg, c, turn)
 			wg.Wait()
+			turn++
 
 		case <-timer.C:
 			timer.Reset(2 * time.Second)
@@ -80,7 +80,7 @@ func makeSafeWorld(matrix [][]byte, p Params) func(y, x int) byte {
 }
 
 // Divides up world from worldChan into number of threads and calls progressWorld on them, sends newWorld back down worldChan
-func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitGroup) {
+func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitGroup, c distributorChannels, turn int) {
 	oldWorld := <-worldChan
 
 	//Create channels for each thread
@@ -94,9 +94,9 @@ func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitG
 	for i := 0; i < p.Threads-1; i++ {
 		startY := subHeight * i
 		endY := subHeight * (i + 1)
-		go progressWorld(oldWorld, subWorlds[i], p.ImageWidth, startY, endY)
+		go progressWorld(oldWorld, subWorlds[i], p.ImageWidth, startY, endY, c, turn)
 	}
-	go progressWorld(oldWorld, subWorlds[p.Threads-1], p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight)
+	go progressWorld(oldWorld, subWorlds[p.Threads-1], p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight, c, turn)
 
 	//Collect progressed world:
 	var newWorld [][]byte
@@ -109,7 +109,7 @@ func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitG
 }
 
 // Progresses section of world and sends results down out
-func progressWorld(oldWorld func(y, x int) byte, out chan<- [][]byte, width, startY, endY int) {
+func progressWorld(oldWorld func(y, x int) byte, out chan<- [][]byte, width, startY, endY int, c distributorChannels, turn int) {
 	//Make newWorld
 	newWorld := make([][]byte, endY-startY)
 	for y := 0; y < endY-startY; y++ {
@@ -123,12 +123,13 @@ func progressWorld(oldWorld func(y, x int) byte, out chan<- [][]byte, width, sta
 			if oldWorld(y, x) == 255 { //if cells alive:
 				if liveNeighbours == 2 || liveNeighbours == 3 { //any live cell with two or three live neighbours is unaffected
 					newWorld[y-startY][x] = 255
+				} else { //cell dies, (slices are init to 0 so don't need to write to newWorld)
+					c.events <- CellFlipped{turn, util.Cell{x, y}}
 				}
-				//any live cell with fewer than two or more than three live neighbours dies
-				//in go slices are initialized to zero, so we don't need to do anything
 			} else { //cells dead
 				if liveNeighbours == 3 { //any dead cell with exactly three live neighbours becomes alive
 					newWorld[y-startY][x] = 255
+					c.events <- CellFlipped{turn, util.Cell{x, y}}
 				}
 			}
 		}
