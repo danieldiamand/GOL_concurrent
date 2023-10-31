@@ -3,6 +3,7 @@ package gol
 import (
 	"fmt"
 	"sync"
+	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -40,10 +41,24 @@ func distributor(p Params, c distributorChannels) {
 
 	var wg sync.WaitGroup
 
-	for ; turn < p.Turns; turn++ {
-		wg.Add(1)
-		go distributeTurn(immutableWorldChannel, p, &wg)
-		wg.Wait()
+	timer := time.NewTimer(2 * time.Second)
+	for turn < p.Turns {
+		select {
+		case immutableWorld = <-immutableWorldChannel:
+			turn++
+			immutableWorldChannel <- immutableWorld
+			wg.Add(1)
+			go distributeTurn(immutableWorldChannel, p, &wg)
+			wg.Wait()
+			c.events <- TurnComplete{turn}
+		case <-timer.C:
+			timer.Reset(2 * time.Second)
+			immutableWorld = <-immutableWorldChannel
+			c.events <- AliveCellsCount{turn, len(calculateAliveCells(p, immutableWorld))}
+			immutableWorldChannel <- immutableWorld
+
+		}
+
 	}
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
@@ -163,3 +178,13 @@ func calculateAliveCells(p Params, board func(y, x int) uint8) []util.Cell {
 	}
 	return cells
 }
+
+//
+//func boardToPGM(board func(y, x int) uint8){
+//	for y := 0; y < p.ImageHeight; y++ {
+//		world[y] = make([]byte, p.ImageWidth)
+//		for x := 0; x < p.ImageWidth; x++ {
+//			world[y][x] = <-c.ioInput
+//		}
+//	}
+//}
