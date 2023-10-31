@@ -17,7 +17,7 @@ type distributorChannels struct {
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
-func distributor(p Params, c distributorChannels) {
+func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 
 	// Send things down channels to start
 	c.ioCommand <- ioInput
