@@ -38,6 +38,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	var wg sync.WaitGroup
 	turn := 0
 	timer := time.NewTimer(2 * time.Second)
+	qPressed := false
 
 	for turn < p.Turns {
 		select {
@@ -54,7 +55,26 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			safeWorld = <-worldChan
 			c.events <- AliveCellsCount{turn, len(calculateAliveCells(safeWorld, p))}
 			worldChan <- safeWorld
+		case key := <-keyPresses:
+			switch key {
+			case 's':
+				safeWorld = <-worldChan
+				go sendWorldToPGM(safeWorld, turn, p, c)
+				worldChan <- safeWorld
+			case 'q':
+				qPressed = true
+			case 'p':
+				println("Paused on turn", turn)
+				for 'p' != <-keyPresses {
+				}
+				println("Continuing")
+			}
+
 		}
+		if qPressed {
+			break
+		}
+
 	}
 
 	//Send final world to io
