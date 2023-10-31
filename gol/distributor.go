@@ -61,8 +61,10 @@ func distributor(p Params, c distributorChannels) {
 
 	}
 
+	immutableWorld = <-immutableWorldChannel
 	// TODO: Report the final state using FinalTurnCompleteEvent.
-	c.events <- FinalTurnComplete{turn, calculateAliveCells(p, <-immutableWorldChannel)}
+	boardToPGM(immutableWorld, turn, p, c)
+	c.events <- FinalTurnComplete{turn, calculateAliveCells(p, immutableWorld)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
@@ -179,12 +181,12 @@ func calculateAliveCells(p Params, board func(y, x int) uint8) []util.Cell {
 	return cells
 }
 
-//
-//func boardToPGM(board func(y, x int) uint8){
-//	for y := 0; y < p.ImageHeight; y++ {
-//		world[y] = make([]byte, p.ImageWidth)
-//		for x := 0; x < p.ImageWidth; x++ {
-//			world[y][x] = <-c.ioInput
-//		}
-//	}
-//}
+func boardToPGM(board func(y, x int) uint8, turn int, p Params, c distributorChannels) {
+	c.ioCommand <- ioOutput
+	c.ioFilename <- fmt.Sprintf("%dx%dx%d", p.ImageHeight, p.ImageWidth, turn)
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
+			c.ioOutput <- board(y, x)
+		}
+	}
+}
