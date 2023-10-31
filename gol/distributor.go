@@ -18,53 +18,49 @@ type distributorChannels struct {
 
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
-
-	// Send things down channels to start
+	//Activate IO to output world:
 	c.ioCommand <- ioInput
 	c.ioFilename <- fmt.Sprintf("%dx%d", p.ImageHeight, p.ImageWidth)
 
-	// Create a 2D slice to store the world.
-
-	world := make([][]byte, p.ImageHeight)
+	//Create 2D slice and store received world in it:
+	startWorld := make([][]byte, p.ImageHeight)
 	for y := 0; y < p.ImageHeight; y++ {
-		world[y] = make([]byte, p.ImageWidth)
+		startWorld[y] = make([]byte, p.ImageWidth)
 		for x := 0; x < p.ImageWidth; x++ {
-			world[y][x] = <-c.ioInput
+			startWorld[y][x] = <-c.ioInput
 		}
 	}
 
-	immutableWorld := makeImmutableMatrix(p, world)
-	immutableWorldChannel := make(chan func(y, x int) byte, 1)
-	immutableWorldChannel <- immutableWorld
-
-	turn := 0
+	worldChan := make(chan func(y, x int) byte, 1)
+	safeWorld := makeSafeWorld(startWorld, p)
+	worldChan <- safeWorld
 
 	var wg sync.WaitGroup
-
+	turn := 0
 	timer := time.NewTimer(2 * time.Second)
+
 	for turn < p.Turns {
 		select {
-		case immutableWorld = <-immutableWorldChannel:
+		case safeWorld = <-worldChan:
 			turn++
-			immutableWorldChannel <- immutableWorld
-			wg.Add(1)
-			go distributeTurn(immutableWorldChannel, p, &wg)
-			wg.Wait()
 			c.events <- TurnComplete{turn}
+			worldChan <- safeWorld
+			wg.Add(1)
+			go distributeTurn(worldChan, p, &wg)
+			wg.Wait()
+
 		case <-timer.C:
 			timer.Reset(2 * time.Second)
-			immutableWorld = <-immutableWorldChannel
-			c.events <- AliveCellsCount{turn, len(calculateAliveCells(p, immutableWorld))}
-			immutableWorldChannel <- immutableWorld
-
+			safeWorld = <-worldChan
+			c.events <- AliveCellsCount{turn, len(calculateAliveCells(safeWorld, p))}
+			worldChan <- safeWorld
 		}
-
 	}
 
-	immutableWorld = <-immutableWorldChannel
-	// TODO: Report the final state using FinalTurnCompleteEvent.
-	boardToPGM(immutableWorld, turn, p, c)
-	c.events <- FinalTurnComplete{turn, calculateAliveCells(p, immutableWorld)}
+	//Send final world to io
+	safeWorld = <-worldChan
+	sendWorldToPGM(safeWorld, turn, p, c)
+	c.events <- FinalTurnComplete{turn, calculateAliveCells(safeWorld, p)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
@@ -76,70 +72,73 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	close(c.events)
 }
 
-func distributeTurn(immutableBoardChannel chan func(y, x int) uint8, p Params, wg *sync.WaitGroup) {
-	// Execute all turns of the Game of Life.
-	channels := make([]chan [][]byte, p.Threads)
-	for i := 0; i < p.Threads; i++ {
-		channels[i] = make(chan [][]byte)
-	}
-
-	subHeight := p.ImageHeight / p.Threads
-	immutableWorld := <-immutableBoardChannel
-	var world [][]byte
-	for i := 0; i < p.Threads-1; i++ {
-		startY := subHeight * i
-		endY := subHeight * (i + 1)
-		go golWorker(p.ImageWidth, startY, endY, immutableWorld, channels[i])
-	}
-	go golWorker(p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight, immutableWorld, channels[p.Threads-1])
-
-	for i := 0; i < p.Threads; i++ {
-		world = append(world, <-channels[i]...)
-	}
-	wg.Done()
-	immutableBoardChannel <- makeImmutableMatrix(p, world)
-}
-
-// makeImmutableMatrix takes an existing 2D matrix and wraps it in a getter closure.
-func makeImmutableMatrix(p Params, matrix [][]uint8) func(y, x int) uint8 {
-	return func(y, x int) uint8 {
+// Makes a closure on a 2D slice with wrapped indexing
+func makeSafeWorld(matrix [][]byte, p Params) func(y, x int) byte {
+	return func(y, x int) byte {
 		return matrix[(y+p.ImageHeight)%p.ImageHeight][(x+p.ImageWidth)%p.ImageWidth]
 	}
 }
 
-func golWorker(width, startY, endY int, oldBoard func(y, x int) uint8, out chan<- [][]byte) {
-	out <- calculateNextState(width, startY, endY, oldBoard)
+// Divides up world from worldChan into number of threads and calls progressWorld on them, sends newWorld back down worldChan
+func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitGroup) {
+	oldWorld := <-worldChan
+
+	//Create channels for each thread
+	subWorlds := make([]chan [][]byte, p.Threads)
+	for i := 0; i < p.Threads; i++ {
+		subWorlds[i] = make(chan [][]byte)
+	}
+
+	//Divide up world and call progressWorld on each segment
+	subHeight := p.ImageHeight / p.Threads
+	for i := 0; i < p.Threads-1; i++ {
+		startY := subHeight * i
+		endY := subHeight * (i + 1)
+		go progressWorld(oldWorld, subWorlds[i], p.ImageWidth, startY, endY)
+	}
+	go progressWorld(oldWorld, subWorlds[p.Threads-1], p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight)
+
+	//Collect progressed world:
+	var newWorld [][]byte
+	for i := 0; i < p.Threads; i++ {
+		newWorld = append(newWorld, <-subWorlds[i]...)
+	}
+
+	worldChan <- makeSafeWorld(newWorld, p)
+	wg.Done()
 }
 
-//using indexing x,y where 0,0 is top left of board
-func calculateNextState(width, startY, endY int, oldBoard func(y, x int) uint8) [][]byte {
-	//make new world
+// Progresses section of world and sends results down out
+func progressWorld(oldWorld func(y, x int) byte, out chan<- [][]byte, width, startY, endY int) {
+	//Make newWorld
 	newWorld := make([][]byte, endY-startY)
 	for y := 0; y < endY-startY; y++ {
 		newWorld[y] = make([]byte, width)
 	}
 
-	//update new world
+	//Calculate contents of newWorld
 	for y := startY; y < endY; y++ {
 		for x := 0; x < width; x++ {
-			count := liveNeighbourCount(y, x, width, oldBoard)
-			if oldBoard(y, x) == 255 { //if cells alive:
-				if count == 2 || count == 3 { //any live cell with two or three live neighbours is unaffected
+			liveNeighbours := countNeighbours(oldWorld, y, x)
+			if oldWorld(y, x) == 255 { //if cells alive:
+				if liveNeighbours == 2 || liveNeighbours == 3 { //any live cell with two or three live neighbours is unaffected
 					newWorld[y-startY][x] = 255
 				}
 				//any live cell with fewer than two or more than three live neighbours dies
 				//in go slices are initialized to zero, so we don't need to do anything
 			} else { //cells dead
-				if count == 3 { //any dead cell with exactly three live neighbours becomes alive
+				if liveNeighbours == 3 { //any dead cell with exactly three live neighbours becomes alive
 					newWorld[y-startY][x] = 255
 				}
 			}
 		}
 	}
-	return newWorld
+
+	out <- newWorld
 }
 
-func liveNeighbourCount(y, x, width int, board func(y, x int) uint8) int8 {
+//Returns the number of alive neighbours of a given cell
+func countNeighbours(board func(y, x int) byte, y, x int) int8 {
 	var count int8 = 0
 	if board(y+1, x+1) == 255 {
 		count++
@@ -169,7 +168,8 @@ func liveNeighbourCount(y, x, width int, board func(y, x int) uint8) int8 {
 	return count
 }
 
-func calculateAliveCells(p Params, board func(y, x int) uint8) []util.Cell {
+//Returns list of all alive cells in board
+func calculateAliveCells(board func(y, x int) byte, p Params) []util.Cell {
 	cells := make([]util.Cell, 0)
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
@@ -181,12 +181,13 @@ func calculateAliveCells(p Params, board func(y, x int) uint8) []util.Cell {
 	return cells
 }
 
-func boardToPGM(board func(y, x int) uint8, turn int, p Params, c distributorChannels) {
+//Prepares io for output and sends board down it a pixel at a time
+func sendWorldToPGM(world func(y, x int) uint8, turn int, p Params, c distributorChannels) {
 	c.ioCommand <- ioOutput
 	c.ioFilename <- fmt.Sprintf("%dx%dx%d", p.ImageHeight, p.ImageWidth, turn)
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
-			c.ioOutput <- board(y, x)
+			c.ioOutput <- world(y, x)
 		}
 	}
 }
