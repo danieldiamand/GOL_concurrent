@@ -39,6 +39,18 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	safeWorld := makeSafeWorld(startWorld, p)
 	worldChan <- safeWorld
 
+	//sectionLengths shows how to divide up board into threads
+	sectionLengths := make([]int, p.Threads+1)
+	sectionLength := p.ImageHeight / p.Threads
+	remainingLength := p.ImageHeight % p.Threads
+	sectionLengths[0] = 0
+	for i := 1; i < p.Threads+1; i++ {
+		sectionLengths[i] = sectionLengths[i-1] + sectionLength //each section is sectionLength
+		if i <= remainingLength {
+			sectionLengths[i]++ //the remaining length is distributed between threads
+		}
+	}
+
 	var wg sync.WaitGroup
 	turn := 0
 	timer := time.NewTimer(2 * time.Second)
@@ -50,7 +62,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 			c.events <- TurnComplete{turn}
 			worldChan <- safeWorld
 			wg.Add(1)
-			go distributeTurn(worldChan, p, &wg, c, turn)
+			go distributeTurn(worldChan, sectionLengths, p, &wg, c, turn)
 			wg.Wait()
 			turn++
 
@@ -104,7 +116,7 @@ func makeSafeWorld(matrix [][]byte, p Params) func(y, x int) byte {
 }
 
 // Divides up world from worldChan into number of threads and calls progressWorld on them, sends newWorld back down worldChan
-func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitGroup, c distributorChannels, turn int) {
+func distributeTurn(worldChan chan func(y, x int) byte, sectionLengths []int, p Params, wg *sync.WaitGroup, c distributorChannels, turn int) {
 	oldWorld := <-worldChan
 
 	//Create channels for each thread
@@ -114,13 +126,11 @@ func distributeTurn(worldChan chan func(y, x int) byte, p Params, wg *sync.WaitG
 	}
 
 	//Divide up world and call progressWorld on each segment
-	subHeight := p.ImageHeight / p.Threads
-	for i := 0; i < p.Threads-1; i++ {
-		startY := subHeight * i
-		endY := subHeight * (i + 1)
+	for i := 0; i < p.Threads; i++ {
+		startY := sectionLengths[i]
+		endY := sectionLengths[i+1]
 		go progressWorld(oldWorld, subWorlds[i], p.ImageWidth, startY, endY, c, turn)
 	}
-	go progressWorld(oldWorld, subWorlds[p.Threads-1], p.ImageWidth, subHeight*(p.Threads-1), p.ImageHeight, c, turn)
 
 	//Collect progressed world:
 	var newWorld [][]byte
