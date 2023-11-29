@@ -96,12 +96,11 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	//Send final world to io
 	safeWorld = <-worldChan
 	sendWorldToPGM(safeWorld, turn, p, c)
-	c.events <- FinalTurnComplete{turn, calculateAliveCells(safeWorld, p)}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
 	<-c.ioIdle
-
+	c.events <- FinalTurnComplete{turn, calculateAliveCells(safeWorld, p)}
 	c.events <- StateChange{turn, Quitting}
 
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
