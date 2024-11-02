@@ -11,11 +11,12 @@ Run the program with the following flags:
 - `-w <width>`: Set the width of the board.
 - `-h <height>`: Set the height of the board.
 - `-t <threads>`: Specify the number of threads to use.
+- `-turns <turns>`: Specify the number of turns to process.
 
 ### Example
 Navigate to route directory of the project and run:
 ```bash
-./conway -w 512 -h 512 -t 8
+./go run main -w 512 -h 512 -t 8
 ```
 
 <em> Note: The program requires a matching PGM image file in `./images` for the specified width and height. If no image is found, it will not start. </em>
